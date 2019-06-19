@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"os"
 
 	"github.com/tarm/serial"
@@ -51,32 +50,9 @@ func sertx(port *serial.Port, rx chan byte) {
 	}
 }
 
-func tcpfw(conn net.Conn, rx chan byte) {
-	buf := make([]byte, 1)
-	for {
-		buf[0] = <-rx
-		_, err := conn.Write(buf)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
-}
-
-func udpdw(conn net.UDPConn, rx chan byte) {
-	buf := make([]byte, 1)
-	for {
-		buf[0] = <-rx
-		_, err := conn.Write(buf)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
-}
-
 func main() {
 	var (
 		baud = flag.Int("b", 115200, "baudrate")
-		tcp  = flag.String("tcp", "", "tcp foward destination")
 	)
 	flag.Parse()
 	args := flag.Args()
@@ -93,19 +69,6 @@ func main() {
 	fromStdin := make(chan byte)
 	fromSerRx := make(chan byte)
 
-	var chans []chan byte
-	var toTCP chan byte
-	chans = append(chans, toStdout)
-	if *tcp != "" {
-		conn, err := net.Dial("tcp", *tcp)
-		if err != nil {
-			log.Fatal(err)
-		}
-		toTCP = make(chan byte)
-		go tcpfw(conn, toTCP)
-		chans = append(chans, toTCP)
-	}
-
 	go sertx(port, toSerTx)
 	go serrx(port, fromSerRx)
 	go stdout(toStdout)
@@ -114,9 +77,7 @@ func main() {
 	for {
 		select {
 		case x := <-fromSerRx:
-			for _, c := range chans {
-				c <- x
-			}
+			toStdout <- x
 		case x := <-fromStdin:
 			toSerTx <- x
 		}
