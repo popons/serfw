@@ -1,6 +1,7 @@
 package main
 
 import (
+	"container/list"
 	"flag"
 	"fmt"
 	"log"
@@ -83,15 +84,85 @@ func udpdw(conn net.UDPConn, rx chan byte) {
 	}
 }
 
-func startTCP(tcp *string, toSerTx chan byte) chan byte {
-	var toTCP chan byte
-	conn, err := net.Dial("tcp", *tcp)
-	if err != nil {
-		log.Fatal(err)
+func duplicator(rx chan byte, register chan (chan byte), remove chan (chan byte)) {
+	cs := list.New()
+	m := make(map[chan byte]*list.Element)
+	for {
+		select {
+		case x := <-rx:
+			for e := cs.Front(); e != nil; e = e.Next() {
+				e.Value.(chan byte) <- x
+			}
+		case x := <-register:
+			e := cs.PushBack(x)
+			m[x] = e
+			log.Println("register num", len(m), cs.Len())
+		case x := <-remove:
+			cs.Remove(m[x])
+			delete(m, x)
+			log.Println("remove num", len(m), cs.Len())
+		}
 	}
-	toTCP = make(chan byte)
-	go tcpfw(conn, toTCP, toSerTx)
-	return toTCP
+}
+func handleConnection(conn *net.TCPConn, rx chan byte, tx chan byte, remove chan (chan byte)) {
+	defer conn.Close()
+	defer func() { remove <- rx }()
+	go func() {
+		buf := make([]byte, 1)
+		for {
+			buf[0] = <-rx
+			_, err := conn.Write(buf)
+			if err != nil {
+				log.Println(err)
+			}
+		}
+	}()
+
+	buf := make([]byte, 4096)
+	for {
+		n, err := conn.Read(buf)
+		if err != nil {
+			if ne, ok := err.(net.Error); ok {
+				switch {
+				case ne.Temporary():
+					continue
+				}
+			}
+			log.Println("Read", err)
+			return
+		}
+		for _, x := range buf[:n] {
+			tx <- x
+		}
+	}
+
+}
+
+func serveTCP(tcp string, rx chan byte, tx chan byte) {
+	tcpAddr, err := net.ResolveTCPAddr("tcp", tcp)
+	log.Println("ResolveTCPAddr => tcpAddr", tcpAddr)
+	if err != nil {
+		log.Fatal("ResolveTCPAddr", err)
+	}
+	l, err := net.ListenTCP("tcp", tcpAddr)
+	if err != nil {
+		log.Fatal("ListenTCP", err)
+	}
+	log.Println("start Listen")
+	defer l.Close()
+	register := make(chan (chan byte))
+	remove := make(chan (chan byte))
+	go duplicator(rx, register, remove)
+	for {
+		conn, err := l.AcceptTCP()
+		if err != nil {
+			log.Fatal("Accept", err)
+		}
+		log.Println("Accepcted", conn.RemoteAddr())
+		rx2 := make(chan byte)
+		go handleConnection(conn, rx2, tx, remove)
+		register <- rx2
+	}
 }
 
 func main() {
@@ -105,7 +176,7 @@ func main() {
 	fmt.Printf("%s, baud:%d\n", portName, *baud)
 	port, err := serial.OpenPort(&serial.Config{Name: portName, Baud: *baud})
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("serial.OpenPort", err)
 	}
 	defer port.Close()
 
@@ -117,7 +188,8 @@ func main() {
 	var chans []chan byte
 	chans = append(chans, toStdout)
 	if *tcp != "" {
-		toTCP := startTCP(tcp, toSerTx)
+		toTCP := make(chan byte)
+		go serveTCP(*tcp, toTCP, toSerTx)
 		chans = append(chans, toTCP)
 	}
 
