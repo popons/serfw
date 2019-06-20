@@ -51,7 +51,17 @@ func sertx(port *serial.Port, rx chan byte) {
 	}
 }
 
-func tcpfw(conn net.Conn, rx chan byte) {
+func tcpfw(conn net.Conn, rx chan byte, tx chan byte) {
+	go func() {
+		rbuf := make([]byte, 1)
+		for {
+			_, err := conn.Read(rbuf)
+			if err != nil {
+				log.Fatal(err)
+			}
+			tx <- rbuf[0]
+		}
+	}()
 	buf := make([]byte, 1)
 	for {
 		buf[0] = <-rx
@@ -71,6 +81,17 @@ func udpdw(conn net.UDPConn, rx chan byte) {
 			log.Fatal(err)
 		}
 	}
+}
+
+func startTCP(tcp *string, toSerTx chan byte) chan byte {
+	var toTCP chan byte
+	conn, err := net.Dial("tcp", *tcp)
+	if err != nil {
+		log.Fatal(err)
+	}
+	toTCP = make(chan byte)
+	go tcpfw(conn, toTCP, toSerTx)
+	return toTCP
 }
 
 func main() {
@@ -96,13 +117,7 @@ func main() {
 	var chans []chan byte
 	chans = append(chans, toStdout)
 	if *tcp != "" {
-		var toTCP chan byte
-		conn, err := net.Dial("tcp", *tcp)
-		if err != nil {
-			log.Fatal(err)
-		}
-		toTCP = make(chan byte)
-		go tcpfw(conn, toTCP)
+		toTCP := startTCP(tcp, toSerTx)
 		chans = append(chans, toTCP)
 	}
 
