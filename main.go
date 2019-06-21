@@ -76,6 +76,7 @@ func duplicator(rx chan byte, register chan (chan byte), remove chan (chan byte)
 		}
 	}
 }
+
 func handleConnection(conn *net.TCPConn, rx chan byte, tx chan byte, remove chan (chan byte)) {
 	defer conn.Close()
 	defer func() { remove <- rx }()
@@ -100,8 +101,8 @@ func handleConnection(conn *net.TCPConn, rx chan byte, tx chan byte, remove chan
 
 }
 
-func serveTCP(tcp string, rx chan byte, tx chan byte) {
-	tcpAddr, err := net.ResolveTCPAddr("tcp", tcp)
+func serveTCP(tcps string, rx chan byte, tx chan byte) {
+	tcpAddr, err := net.ResolveTCPAddr("tcp", tcps)
 	log.Println("ResolveTCPAddr => tcpAddr", tcpAddr)
 	if err != nil {
 		log.Fatal("ResolveTCPAddr", err)
@@ -126,11 +127,21 @@ func serveTCP(tcp string, rx chan byte, tx chan byte) {
 		register <- rx2
 	}
 }
-
+func startTCP(tcp string, toSerTx chan byte) chan byte {
+	var toTCP chan byte
+	conn, err := net.Dial("tcp", tcp)
+	if err != nil {
+		log.Fatal(err)
+	}
+	toTCP = make(chan byte)
+	go tcpfw(conn, toTCP, toSerTx)
+	return toTCP
+}
 func main() {
 	var (
 		baud = flag.Int("b", 115200, "baudrate")
-		tcp  = flag.String("tcp", "", "tcp foward destination")
+		tcps = flag.String("tcps", "", "tcps foward destination")
+		tcpc = flag.String("tcpc", "", "tcpc foward destination")
 	)
 	flag.Parse()
 	args := flag.Args()
@@ -149,9 +160,15 @@ func main() {
 
 	var chans []chan byte
 	chans = append(chans, toStdout)
-	if *tcp != "" {
+
+	if *tcps != "" {
 		toTCP := make(chan byte)
-		go serveTCP(*tcp, toTCP, toSerTx)
+		go serveTCP(*tcps, toTCP, toSerTx)
+		chans = append(chans, toTCP)
+	}
+
+	if *tcpc != "" {
+		toTCP := startTCP(*tcpc, toSerTx)
 		chans = append(chans, toTCP)
 	}
 
