@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -11,77 +12,48 @@ import (
 	"github.com/tarm/serial"
 )
 
-func stdin(tx chan byte) {
+func read(reader io.Reader, tx chan byte) {
 	buf := make([]byte, 1)
 	for {
-		_, err := os.Stdin.Read(buf)
+		_, err := reader.Read(buf)
 		if err != nil {
 			log.Fatal(err)
 		}
 		tx <- buf[0]
 	}
+}
+
+func write(writer io.Writer, rx chan byte) {
+	buf := make([]byte, 1)
+	for {
+		buf[0] = <-rx
+		writer.Write(buf)
+	}
+}
+
+func stdin(tx chan byte) {
+	read(os.Stdin, tx)
 }
 
 func stdout(rx chan byte) {
-	buf := make([]byte, 1)
-	for {
-		buf[0] = <-rx
-		os.Stdout.Write(buf)
-	}
+	write(os.Stdout, rx)
 }
 
 func serrx(port *serial.Port, tx chan byte) {
-	buf := make([]byte, 1)
-	for {
-		_, err := port.Read(buf)
-		if err != nil {
-			log.Fatal(err)
-		}
-		tx <- buf[0]
-	}
+	read(port, tx)
 }
 
 func sertx(port *serial.Port, rx chan byte) {
-	buf := make([]byte, 1)
-	for {
-		buf[0] = <-rx
-		_, err := port.Write(buf)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
+	write(port, rx)
 }
 
 func tcpfw(conn net.Conn, rx chan byte, tx chan byte) {
-	go func() {
-		rbuf := make([]byte, 1)
-		for {
-			_, err := conn.Read(rbuf)
-			if err != nil {
-				log.Fatal(err)
-			}
-			tx <- rbuf[0]
-		}
-	}()
-	buf := make([]byte, 1)
-	for {
-		buf[0] = <-rx
-		_, err := conn.Write(buf)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
+	go read(conn, tx)
+	write(conn, rx)
 }
 
 func udpdw(conn net.UDPConn, rx chan byte) {
-	buf := make([]byte, 1)
-	for {
-		buf[0] = <-rx
-		_, err := conn.Write(buf)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
+	write(&conn, rx)
 }
 
 func duplicator(rx chan byte, register chan (chan byte), remove chan (chan byte)) {
@@ -107,17 +79,7 @@ func duplicator(rx chan byte, register chan (chan byte), remove chan (chan byte)
 func handleConnection(conn *net.TCPConn, rx chan byte, tx chan byte, remove chan (chan byte)) {
 	defer conn.Close()
 	defer func() { remove <- rx }()
-	go func() {
-		buf := make([]byte, 1)
-		for {
-			buf[0] = <-rx
-			_, err := conn.Write(buf)
-			if err != nil {
-				log.Println(err)
-			}
-		}
-	}()
-
+	go write(conn, rx)
 	buf := make([]byte, 4096)
 	for {
 		n, err := conn.Read(buf)
