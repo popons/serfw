@@ -8,6 +8,10 @@ import (
 	"log"
 	"net"
 	"os"
+	"strings"
+	"time"
+
+	"github.com/armon/circbuf"
 
 	"github.com/tarm/serial"
 )
@@ -48,8 +52,27 @@ func sertx(port *serial.Port, rx chan byte) {
 }
 
 func tcpfw(conn net.Conn, rx chan byte, tx chan byte) {
+	const layout2 = "[2006-01-02 15:04:05.000] "
 	go read(conn, tx)
-	write(conn, rx)
+	lineBuf, _ := circbuf.NewBuffer(4096)
+
+	var timeStamp time.Time
+	for {
+		x := <-rx
+		if lineBuf.TotalWritten() == 0 {
+			timeStamp = time.Now()
+		}
+		if x != 0xA && x != 0xD {
+			lineBuf.Write([]byte{x})
+		}
+		if x == 0xA {
+			bytes := lineBuf.Bytes()
+			lineBuf.Reset()
+			msg := timeStamp.Format(layout2) + strings.TrimRight(string(bytes), " \t\r\n")
+			conn.Write([]byte(msg))
+		}
+	}
+	//write(bufconn, rx)
 }
 
 func udpdw(conn net.UDPConn, rx chan byte) {
