@@ -2,6 +2,7 @@ package main
 
 import (
 	"container/list"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -114,7 +116,7 @@ func udpdw(conn net.UDPConn, rx chan byte) {
 	write(&conn, rx)
 }
 
-func duplicator(rx chan byte, register chan (chan byte), remove chan (chan byte)) {
+func duplicator(rx <-chan byte, register chan (chan byte), remove chan (chan byte)) {
 	cs := list.New()
 	m := make(map[chan byte]*list.Element)
 	for {
@@ -209,13 +211,21 @@ var (
 	logDir = flag.String("logdir", "sup-log", "used as log file save directory")
 )
 
+func sendStringToChan(x string, tx chan<- byte) {
+	for _, x := range []byte(x) {
+		tx <- x
+	}
+}
+
 func main() {
 	argss := os.Args
 	fmt.Println(argss)
 	var (
-		baud = flag.Int("b", 115200, "baudrate")
-		tcps = flag.String("tcps", "", "tcps foward destination")
-		tcpc = flag.String("tcpc", "", "tcpc foward destination")
+		baud   = flag.Int("b", 115200, "baudrate")
+		tcps   = flag.String("tcps", "", "tcps foward destination")
+		tcpc   = flag.String("tcpc", "", "tcpc foward destination")
+		pktLoc = flag.String("ploc", "", "udp packet receive interface")
+		pktRem = flag.String("prem", "", "udp packet send destination")
 	)
 	flag.Parse()
 	args := flag.Args()
@@ -244,6 +254,70 @@ func main() {
 	if *tcpc != "" {
 		toTCP := startTCP(*tcpc, toSerTx)
 		chans = append(chans, toTCP)
+	}
+
+	if *pktLoc != "" && *pktRem != "" {
+		// receive to
+		go func() {
+			addr, err := net.ResolveUDPAddr("udp", *pktLoc)
+			if err != nil {
+				log.Fatal("net.ResolveUDPAddr()", err)
+			}
+			conn, err := net.ListenUDP("udp", addr)
+			if err != nil {
+				log.Fatal("net.ListenUDP()", addr, err)
+			}
+			buf := make([]byte, 4096)
+			for {
+				n, err := conn.Read(buf)
+				if err != nil {
+					log.Fatal("conn.Read()", err)
+				}
+				sendStringToChan("pktin\r\n", toSerTx)
+				pkts := strings.ReplaceAll(hex.EncodeToString(buf[:n]), " ", "")
+				sendStringToChan(pkts, toSerTx)
+				sendStringToChan("$\r\n", toSerTx)
+			}
+		}()
+		go func() {
+			rx := make(chan byte)
+			chans = append(chans, rx)
+			lineBuf, _ := circbuf.NewBuffer(4096)
+			inPkt := false
+			sbuf := make([]byte, 4096)
+			conn, err := net.Dial("udp", *pktRem)
+			if err != nil {
+				log.Fatal("udp.Dial", *pktRem, err)
+			}
+			for {
+				x := <-rx
+				if x != 0xA && x != 0xD {
+					lineBuf.Write([]byte{x})
+				}
+				if x == 0xA {
+					str := string(lineBuf.Bytes())
+					lineBuf.Reset()
+					if strings.HasPrefix(str, "#!begin pktout") {
+						inPkt = true
+					} else if strings.HasPrefix(str, "#!end pktout") {
+						inPkt = false
+					} else if inPkt && strings.HasSuffix(str, "$") {
+						n := len(str) - 1
+
+						for i := 0; i < n; i += 2 {
+							x, err := strconv.ParseUint(str[i:i+2], 16, 8)
+							if err != nil {
+								log.Println("parseint", str[0:n-1], err)
+							}
+							sbuf[i>>1] = byte(x)
+						}
+						conn.Write(sbuf[:n>>1])
+						tmp := sbuf[:n>>1]
+						fmt.Println(hex.Dump(tmp))
+					}
+				}
+			}
+		}()
 	}
 
 	go sertx(port, toSerTx)
