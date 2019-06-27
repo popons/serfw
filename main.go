@@ -22,7 +22,8 @@ func read(reader io.Reader, tx chan byte) {
 	for {
 		_, err := reader.Read(buf)
 		if err != nil {
-			log.Fatal(err)
+			log.Println(err)
+			break
 		}
 		tx <- buf[0]
 	}
@@ -100,7 +101,11 @@ func tcpfw(conn net.Conn, rx chan byte, tx chan byte) {
 			lineBuf.Reset()
 			msg := timeStamp.Format(layout2) + strings.TrimRight(string(bytes), " \t\r\n")
 			appendLogFile(msg)
-			conn.Write([]byte(msg + "\n"))
+			_, err := conn.Write([]byte(msg + "\n"))
+			if err != nil {
+				log.Println("conn.Write()", err)
+				break
+			}
 		}
 	}
 }
@@ -181,13 +186,22 @@ func serveTCP(tcps string, rx chan byte, tx chan byte) {
 	}
 }
 func startTCP(tcp string, toSerTx chan byte) chan byte {
-	var toTCP chan byte
-	conn, err := net.Dial("tcp", tcp)
-	if err != nil {
-		log.Fatal(err)
-	}
-	toTCP = make(chan byte)
-	go tcpfw(conn, toTCP, toSerTx)
+	toTCP := make(chan byte)
+	n := 1
+	go func() {
+		for {
+			conn, err := net.Dial("tcp", tcp)
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer conn.Close()
+			tcpfw(conn, toTCP, toSerTx)
+			log.Println("tcpfw() exiit , wait 5sec next try")
+			time.Sleep(5 * time.Second)
+			n++
+			log.Printf("tcp connection %d times\n", n)
+		}
+	}()
 	return toTCP
 }
 
