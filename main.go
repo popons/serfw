@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -51,6 +52,35 @@ func sertx(port *serial.Port, rx chan byte) {
 	write(port, rx)
 }
 
+// exists returns whether the given file or directory exists
+func exists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return true, err
+}
+func appendLogFile(msg string) {
+	if yes, _ := exists(*logDir); !yes {
+		err := os.MkdirAll(*logDir, 0777)
+		if err != nil {
+			log.Fatal("os.MkdirAll", err)
+		}
+	}
+	logPath := fmt.Sprintf("%s.txt", time.Now().Format("2006-01-02"))
+	logFullPath := path.Join(*logDir, logPath)
+	file, err := os.OpenFile(logFullPath, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0666)
+	if err != nil {
+		//エラー処理
+		log.Fatal(err)
+	}
+	defer file.Close()
+	fmt.Fprintln(file, msg)
+}
+
 func tcpfw(conn net.Conn, rx chan byte, tx chan byte) {
 	const layout2 = "[2006-01-02 15:04:05.000] "
 	go read(conn, tx)
@@ -69,10 +99,10 @@ func tcpfw(conn net.Conn, rx chan byte, tx chan byte) {
 			bytes := lineBuf.Bytes()
 			lineBuf.Reset()
 			msg := timeStamp.Format(layout2) + strings.TrimRight(string(bytes), " \t\r\n")
-			conn.Write([]byte(msg))
+			appendLogFile(msg)
+			conn.Write([]byte(msg + "\n"))
 		}
 	}
-	//write(bufconn, rx)
 }
 
 func udpdw(conn net.UDPConn, rx chan byte) {
@@ -160,7 +190,14 @@ func startTCP(tcp string, toSerTx chan byte) chan byte {
 	go tcpfw(conn, toTCP, toSerTx)
 	return toTCP
 }
+
+var (
+	logDir = flag.String("logdir", "sup-log", "used as log file save directory")
+)
+
 func main() {
+	argss := os.Args
+	fmt.Println(argss)
 	var (
 		baud = flag.Int("b", 115200, "baudrate")
 		tcps = flag.String("tcps", "", "tcps foward destination")
