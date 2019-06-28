@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/armon/circbuf"
 
@@ -84,6 +85,16 @@ func appendLogFile(msg string) {
 	fmt.Fprintln(file, msg)
 }
 
+func toValidUtf8Lossy(src []byte) []byte {
+	for {
+		if utf8.Valid(src) {
+			return src
+		} else {
+			src = src[:len(src)-1]
+		}
+	}
+}
+
 func tcpfw(conn net.Conn, rx chan byte, tx chan byte) {
 	const layout2 = "[2006-01-02 15:04:05.000] "
 	go read(conn, tx)
@@ -100,13 +111,16 @@ func tcpfw(conn net.Conn, rx chan byte, tx chan byte) {
 		}
 		if x == 0xA {
 			bytes := lineBuf.Bytes()
+			bytes = toValidUtf8Lossy(bytes)
 			lineBuf.Reset()
-			msg := timeStamp.Format(layout2) + strings.TrimRight(string(bytes), " \t\r\n")
-			appendLogFile(msg)
-			_, err := conn.Write([]byte(msg + "\n"))
-			if err != nil {
-				log.Println("conn.Write()", err)
-				break
+			if len(bytes) != 0 {
+				msg := timeStamp.Format(layout2) + strings.TrimRight(string(bytes), " \t\r\n")
+				appendLogFile(msg)
+				_, err := conn.Write([]byte(msg + "\n"))
+				if err != nil {
+					log.Println("conn.Write()", err)
+					break
+				}
 			}
 		}
 	}
