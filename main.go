@@ -231,6 +231,41 @@ func sendStringToChan(x string, tx chan<- byte) {
 	}
 }
 
+type HexBuffer struct {
+	n    int
+	last byte
+	buf  []byte
+}
+
+func NewHexBuffer(size int) *HexBuffer {
+	return &HexBuffer{0, 0, make([]byte, size)}
+}
+
+func (h *HexBuffer) Add(x byte) {
+	if h.n%2 == 1 {
+		s := fmt.Sprintf("%s", string([]byte{h.last, x}))
+		y, err := strconv.ParseInt(s, 16, 32)
+		if err != nil {
+			fmt.Println("Add", s, err)
+		}
+		h.buf[h.n>>1] = byte(y)
+	}
+	h.last = x
+	h.n++
+}
+
+func (h *HexBuffer) Reset() {
+	h.n = 0
+	h.last = 0
+}
+
+func (h *HexBuffer) Bytes() []byte {
+	if h.n%2 != 0 {
+		log.Println("HexBuffer.Bytes h.n is not even =>", h.n)
+	}
+	return h.buf[:h.n>>1]
+}
+
 func main() {
 	argss := os.Args
 	fmt.Println(argss)
@@ -294,11 +329,11 @@ func main() {
 			}
 		}()
 		go func() {
+			hBuf := NewHexBuffer(4096)
 			rx := make(chan byte)
 			chans = append(chans, rx)
 			lineBuf, _ := circbuf.NewBuffer(4096)
 			inPkt := false
-			sbuf := make([]byte, 4096)
 			conn, err := net.Dial("udp", *pktRem)
 			if err != nil {
 				log.Fatal("udp.Dial", *pktRem, err)
@@ -308,26 +343,23 @@ func main() {
 				if x != 0xA && x != 0xD {
 					lineBuf.Write([]byte{x})
 				}
+				if x != 0xA && x != 0xD && inPkt {
+					if x == '$' {
+						inPkt = false
+						s := hBuf.Bytes()
+						conn.Write(s)
+					} else {
+						hBuf.Add(x)
+					}
+				}
 				if x == 0xA {
 					str := string(lineBuf.Bytes())
 					lineBuf.Reset()
 					if strings.HasPrefix(str, "#!begin pktout") {
+						hBuf.Reset()
 						inPkt = true
 					} else if strings.HasPrefix(str, "#!end pktout") {
 						inPkt = false
-					} else if inPkt && strings.HasSuffix(str, "$") {
-						n := len(str) - 1
-
-						for i := 0; i < n; i += 2 {
-							x, err := strconv.ParseUint(str[i:i+2], 16, 8)
-							if err != nil {
-								log.Println("parseint", str[0:n-1], err)
-							}
-							sbuf[i>>1] = byte(x)
-						}
-						conn.Write(sbuf[:n>>1])
-						tmp := sbuf[:n>>1]
-						fmt.Println(hex.Dump(tmp))
 					}
 				}
 			}
